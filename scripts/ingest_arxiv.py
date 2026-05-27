@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import sys
 import time
 
@@ -18,14 +19,16 @@ from datasets import load_dataset
 from loguru import logger
 from tqdm import tqdm
 
-API_BASE = "http://localhost:8000/api/v1"
-BATCH_SIZE = 512
+API_BASE = "http://api:8000/api/v1"
+BATCH_SIZE = 64
+REQUEST_TIMEOUT = 900.0
 
 
 def parse_args():
     p = argparse.ArgumentParser(description="Ingest ArXiv papers into the semantic search platform")
     p.add_argument("--limit", type=int, default=50_000, help="Max papers to index (default: 50k)")
     p.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Papers per API request")
+    p.add_argument("--timeout", type=float, default=REQUEST_TIMEOUT, help="Seconds to wait for each API request")
     p.add_argument("--api-base", type=str, default=API_BASE, help="FastAPI base URL")
     p.add_argument("--categories", nargs="*", help="Filter to specific ArXiv categories (e.g. cs.AI cs.LG)")
     return p.parse_args()
@@ -34,7 +37,7 @@ def parse_args():
 def load_arxiv(limit: int, categories: list[str] | None = None):
     logger.info("Loading ArXiv dataset from HuggingFace (streaming)...")
     ds = load_dataset(
-        "Cornell-University/arxiv",
+        "CShorten/ML-ArXiv-Papers",
         split="train",
         streaming=True,
         trust_remote_code=True,
@@ -57,23 +60,24 @@ def load_arxiv(limit: int, categories: list[str] | None = None):
         if not abstract or not title or len(abstract) < 50:
             continue
 
+        paper_id = hashlib.sha1(title.encode("utf-8")).hexdigest()[:16]
         papers.append({
-            "paper_id": row["id"],
+            "paper_id": paper_id,
             "title": title,
             "abstract": abstract,
-            "authors": [a.strip() for a in (row.get("authors") or "").split(",")][:10],
-            "categories": (row.get("categories") or "").split(),
-            "published": row.get("update_date") or row.get("versions", [{}])[0].get("created", ""),
+            "authors": [],
+            "categories": ["cs.LG"],
+            "published": "",
         })
 
     logger.info(f"Loaded {len(papers)} papers")
     return papers
 
 
-def batch_index(papers: list[dict], batch_size: int, api_base: str) -> tuple[int, int]:
+def batch_index(papers: list[dict], batch_size: int, api_base: str, timeout: float) -> tuple[int, int]:
     indexed, failed = 0, 0
 
-    with httpx.Client(timeout=120.0) as client:
+    with httpx.Client(timeout=timeout) as client:
         for i in tqdm(range(0, len(papers), batch_size), desc="Indexing batches"):
             batch = papers[i : i + batch_size]
             try:
@@ -101,7 +105,12 @@ def main():
     t0 = time.monotonic()
 
     papers = load_arxiv(limit=args.limit, categories=args.categories)
-    indexed, failed = batch_index(papers, batch_size=args.batch_size, api_base=args.api_base)
+    indexed, failed = batch_index(
+        papers,
+        batch_size=args.batch_size,
+        api_base=args.api_base,
+        timeout=args.timeout,
+    )
 
     elapsed = round((time.monotonic() - t0) / 60, 1)
     logger.info(f"Done — indexed={indexed}, failed={failed}, time={elapsed}min")

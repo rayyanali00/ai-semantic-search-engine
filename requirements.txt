@@ -1,15 +1,22 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 # API
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
 python-multipart==0.0.9
 
 # Embeddings
+#sentence-transformers==3.0.1
+#torch==2.3.0
+#transformers==4.41.2
+
 sentence-transformers==3.0.1
-torch==2.3.0
-transformers==4.41.2
+torch==2.3.0+cpu
 
 # Vector DB
 qdrant-client==1.9.1
+
+httpx==0.27.0
 
 # Caching
 redis==5.0.4

@@ -2,8 +2,8 @@ import time
 
 from loguru import logger
 
-from app.db.qdrant_client import qdrant_db
 from app.db.mongo_client import mongo_db
+from app.db.qdrant_client import qdrant_db
 from app.db.redis_client import redis_cache
 from app.embeddings.embedding_service import embedding_service
 from app.models.schemas import (
@@ -19,33 +19,46 @@ from app.models.schemas import (
 class SearchService:
     """
     Orchestrates the full semantic search pipeline:
-      embed query → cache check → Milvus ANN search → MongoDB metadata hydration
+      embed query -> cache check -> vector search -> MongoDB metadata hydration
     """
 
     async def search(self, query: str, top_k: int = 10) -> SearchResponse:
         t0 = time.monotonic()
+        timings: dict[str, float] = {}
 
-        # 1. Check embedding cache
+        redis_get_t0 = time.monotonic()
         cache_key = embedding_service.cache_key(query)
         query_vec = await redis_cache.get(cache_key)
+        timings["redis_get_ms"] = round((time.monotonic() - redis_get_t0) * 1000, 2)
         cache_hit = query_vec is not None
 
         if not cache_hit:
-            logger.info(f"Cache miss — embedding query: {query[:60]!r}")
+            logger.info(f"Cache miss - embedding query: {query[:60]!r}")
+            embed_t0 = time.monotonic()
             query_vec = embedding_service.embed(query)
+            timings["embed_ms"] = round((time.monotonic() - embed_t0) * 1000, 2)
+
+            redis_set_t0 = time.monotonic()
             await redis_cache.set(cache_key, query_vec)
+            timings["redis_set_ms"] = round((time.monotonic() - redis_set_t0) * 1000, 2)
         else:
             logger.info(f"Cache hit for query: {query[:60]!r}")
+            timings["embed_ms"] = 0.0
 
-        # 2. Vector search in Milvus
+        qdrant_t0 = time.monotonic()
         hits = qdrant_db.search(query_vec, top_k=top_k)
+        timings["qdrant_search_ms"] = round((time.monotonic() - qdrant_t0) * 1000, 2)
         if not hits:
+            timings["total_ms"] = round((time.monotonic() - t0) * 1000, 2)
+            logger.info(f"Search profile - {timings}")
             return SearchResponse(query=query, results=[], total=0, took_ms=0)
 
-        # 3. Hydrate metadata from MongoDB
         paper_ids = [h["paper_id"] for h in hits]
         score_map = {h["paper_id"]: h["score"] for h in hits}
+
+        mongo_t0 = time.monotonic()
         papers = await mongo_db.get_by_ids(paper_ids)
+        timings["mongo_get_ms"] = round((time.monotonic() - mongo_t0) * 1000, 2)
 
         results = [
             SearchResult(
@@ -61,7 +74,9 @@ class SearchService:
         ]
 
         took_ms = round((time.monotonic() - t0) * 1000, 2)
-        logger.info(f"Search complete — {len(results)} results in {took_ms}ms (cache={'hit' if cache_hit else 'miss'})")
+        timings["total_ms"] = took_ms
+        logger.info(f"Search complete - {len(results)} results in {took_ms}ms (cache={'hit' if cache_hit else 'miss'})")
+        logger.info(f"Search profile - {timings}")
 
         return SearchResponse(
             query=query,
@@ -112,7 +127,7 @@ class SearchService:
         ]
         await mongo_db.upsert_many(mongo_docs)
 
-        logger.info(f"Bulk index complete — {len(papers)} papers")
+        logger.info(f"Bulk index complete - {len(papers)} papers")
         return BulkIndexResponse(indexed=len(papers), failed=0, total=len(papers))
 
 

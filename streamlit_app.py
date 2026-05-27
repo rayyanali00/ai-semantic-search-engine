@@ -4,13 +4,15 @@ Run with: streamlit run streamlit_app.py
 """
 
 import time
+import os
 
 import httpx
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-API_BASE = "http://localhost:8000/api/v1"
+API_BASE = os.getenv("API_BASE", "http://localhost:8000/api/v1")
+API_TIMEOUT = float(os.getenv("API_TIMEOUT", "180"))
 
 st.set_page_config(
     page_title="ArXiv Semantic Search",
@@ -78,7 +80,7 @@ with st.sidebar:
                 r = httpx.post(
                     f"{API_BASE}/index",
                     json={"paper_id": pid, "title": title, "abstract": abstract},
-                    timeout=30,
+                    timeout=API_TIMEOUT,
                 )
                 st.success(r.json().get("message", "Indexed!"))
             except Exception as e:
@@ -112,12 +114,15 @@ if query:
             resp = httpx.post(
                 f"{API_BASE}/search",
                 json={"query": query, "top_k": top_k},
-                timeout=30,
+                timeout=API_TIMEOUT,
             )
             resp.raise_for_status()
             data = resp.json()
         except httpx.ConnectError:
             st.error("Cannot connect to API. Is the server running? (`uvicorn main:app --reload`)")
+            st.stop()
+        except httpx.TimeoutException:
+            st.error("Search timed out while the API was embedding the query. Try again in a moment, or pause ingestion while testing search.")
             st.stop()
         except Exception as e:
             st.error(f"Search failed: {e}")

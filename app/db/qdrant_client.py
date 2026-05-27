@@ -1,3 +1,5 @@
+import hashlib
+
 from loguru import logger
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
@@ -71,7 +73,7 @@ class QdrantDB:
         """
         points = [
             PointStruct(
-                id=abs(hash(paper_id)) % (2**63),  # Qdrant needs uint64 IDs
+                id=int(hashlib.sha256(paper_id.encode("utf-8")).hexdigest()[:16], 16) % (2**63),
                 vector=embedding,
                 payload={"paper_id": paper_id},
             )

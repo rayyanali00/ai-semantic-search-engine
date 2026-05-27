@@ -10,7 +10,6 @@ from app.config import get_settings
 from app.db.qdrant_client import qdrant_db
 from app.db.mongo_client import mongo_db
 from app.db.redis_client import redis_cache
-from app.embeddings.embedding_service import embedding_service
 
 settings = get_settings()
 
@@ -63,7 +62,6 @@ async def startup():
     await redis_cache.connect()
     await mongo_db.connect()
     qdrant_db.connect()
-    embedding_service.load()
     logger.info("All services ready ✓")
 
 

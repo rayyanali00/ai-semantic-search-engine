@@ -1,9 +1,15 @@
 from functools import lru_cache
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
     # App
     app_name: str = "semantic-search-platform"
     app_env: str = "development"
@@ -28,10 +34,18 @@ class Settings(BaseSettings):
     mongo_collection: str = "papers"
 
     # Embedding
+    # embedding_model: str = "sentence-transformers/all-mpnet-base-v2"
+    # embedding_batch_size: int = 64
+    # embedding_dim: int = 768
+    # embedding_device: str = "cpu"
+
+    hf_api_token: str = ""
     embedding_model: str = "sentence-transformers/all-mpnet-base-v2"
-    embedding_batch_size: int = 64
     embedding_dim: int = 768
-    embedding_device: str = "cpu"
+    embedding_batch_size: int = 64
+
+    # UI / scripts
+    api_base: str = "http://localhost:8000/api/v1"
 
     # Search
     default_top_k: int = 10
@@ -40,11 +54,6 @@ class Settings(BaseSettings):
     # Celery
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
-
 
 @lru_cache()
 def get_settings() -> Settings:
