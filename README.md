@@ -1,62 +1,104 @@
 # Semantic Search Platform
 
-> AI-powered semantic search over 2M+ ArXiv research papers.  
-> Built with SentenceTransformers, Milvus, FastAPI, Redis, MongoDB, and Streamlit.
+AI-powered semantic search for ArXiv-style research papers.
+
+Built with FastAPI, SentenceTransformers, Qdrant, MongoDB, Redis, Celery, and Streamlit.
 
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.111-green)
 ![Docker](https://img.shields.io/badge/docker-compose-blue)
-![CI](https://img.shields.io/badge/CI-GitHub_Actions-black)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 ---
 
-## The Problem with Keyword Search
+## What It Does
 
-Traditional search engines match exact words. Search for *"AI that explains itself"* and you get nothing — even though hundreds of papers on **explainable AI, LIME, and SHAP** exist. Keyword search has no understanding of *meaning*.
+Keyword search only matches exact words. This project searches by meaning.
 
-**The vocabulary mismatch problem:**
-- You say: *"transformers running on mobile"*
-- Papers say: *"efficient inference on edge devices"*
-- Keyword search: zero results
+Example:
+
+- Query: `AI that explains itself`
+- Relevant papers may say: `explainable AI`, `interpretability`, `LIME`, or `SHAP`
+- Semantic search can still connect them because it compares embedding vectors, not just text tokens.
 
 ---
 
-## The Solution: Semantic Search
+## Current Flow
 
-Semantic search understands **meaning**, not just words.
-
-1. Every paper's title + abstract is converted to a **768-dimensional embedding vector** using `all-mpnet-base-v2`
-2. Vectors are stored in **Milvus**, a purpose-built vector database
-3. At query time, your query becomes a vector — and Milvus finds the most **geometrically similar** paper vectors (cosine similarity)
-4. Results are ranked by semantic closeness, not keyword frequency
-
+```text
+User query or paper text
+        |
+        v
+FastAPI API (/api/v1)
+        |
+        v
+SentenceTransformers embedding model
+        |
+        +--> Redis caches query embeddings
+        |
+        v
+Qdrant stores and searches vectors by cosine similarity
+        |
+        v
+MongoDB stores and returns paper metadata
+        |
+        v
+FastAPI response -> Streamlit UI
 ```
-User query: "neural networks that explain their decisions"
-     ↓
-Embedding model (all-mpnet-base-v2)
-     ↓
-768-dim query vector
-     ↓
-Milvus ANN search (top-k cosine similarity)
-     ↓
-MongoDB metadata fetch (title, authors, abstract)
-     ↓
-FastAPI JSON response → Streamlit UI
+
+### Indexing Flow
+
+```text
+scripts/ingest_arxiv.py
+        |
+        v
+Hugging Face dataset stream
+        |
+        v
+POST /api/v1/index/bulk
+        |
+        v
+Embed title + abstract
+        |
+        +--> Qdrant: paper_id + vector
+        |
+        +--> MongoDB: title, abstract, authors, categories, published date
+```
+
+### Search Flow
+
+```text
+POST /api/v1/search
+        |
+        v
+Check Redis for cached query embedding
+        |
+        v
+Embed query on cache miss
+        |
+        v
+Qdrant nearest-neighbor search
+        |
+        v
+Fetch matching paper metadata from MongoDB
+        |
+        v
+Return ranked results with similarity scores
 ```
 
 ---
 
 ## Features
 
-- **Semantic retrieval** — finds papers by meaning, not keywords
-- **2M+ paper index** — full ArXiv corpus via HuggingFace datasets
-- **Sub-100ms search** — IVF_FLAT index with Redis embedding cache
-- **Async FastAPI** — production-grade API with Pydantic validation
-- **Batched indexing** — index 512 papers per request, ~1000 papers/min
-- **Metadata filtering** — filter by ArXiv category (cs.AI, cs.LG, etc.)
-- **Streamlit UI** — interactive search interface with score visualization
-- **Fully dockerized** — one command to run everything
+- Semantic search over paper titles and abstracts
+- Local embedding with `sentence-transformers/all-mpnet-base-v2`
+- Qdrant vector storage using cosine similarity
+- MongoDB metadata storage
+- Redis embedding cache
+- Bulk ingestion from Hugging Face datasets
+- FastAPI JSON API with interactive docs
+- Streamlit UI for searching and indexing single papers
+- Docker Compose setup for API, UI, worker, Qdrant, Redis, and MongoDB
 
 ---
 
@@ -64,85 +106,116 @@ FastAPI JSON response → Streamlit UI
 
 | Layer | Technology |
 |---|---|
+| API | FastAPI + Pydantic v2 |
+| Embeddings | SentenceTransformers |
 | Embedding model | `sentence-transformers/all-mpnet-base-v2` |
-| Vector database | Milvus 2.4 (IVF_FLAT, cosine similarity) |
-| API framework | FastAPI + Pydantic v2 |
-| Metadata store | MongoDB 7.0 (Motor async driver) |
-| Caching | Redis 7.2 (embedding result cache) |
-| Task queue | Celery + Redis broker |
+| Vector database | Qdrant |
+| Metadata store | MongoDB + Motor |
+| Cache / broker | Redis |
+| Worker | Celery |
 | Frontend | Streamlit + Plotly |
-| Containerization | Docker + docker-compose |
-| CI | GitHub Actions |
-| Logging | loguru |
-| Testing | pytest + pytest-asyncio |
+| Ingestion | Hugging Face `datasets` |
+| Tests | pytest + pytest-asyncio |
 
 ---
 
-## Architecture
+## Services
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Streamlit UI :8501                    │
-└────────────────────────┬────────────────────────────────┘
-                         │ HTTP
-┌────────────────────────▼────────────────────────────────┐
-│                  FastAPI API :8000                       │
-│   POST /embed   POST /search   POST /index   GET /health │
-└──────┬──────────────┬───────────────┬───────────────────┘
-       │              │               │
-  ┌────▼────┐   ┌─────▼──────┐  ┌────▼──────┐
-  │  Redis  │   │   Milvus   │  │  MongoDB  │
-  │  cache  │   │ vector DB  │  │ metadata  │
-  │  :6379  │   │   :19530   │  │  :27017   │
-  └─────────┘   └────────────┘  └───────────┘
-```
+| Service | URL / Port | Purpose |
+|---|---:|---|
+| API | http://localhost:8000 | FastAPI app |
+| API docs | http://localhost:8000/docs | OpenAPI docs |
+| Streamlit UI | http://localhost:8501 | Search interface |
+| Qdrant | http://localhost:6333 | Vector database |
+| Redis | localhost:6379 | Cache and Celery broker |
+| MongoDB | localhost:27017 | Paper metadata |
 
 ---
 
 ## Quick Start
 
-### Prerequisites
-- Docker + docker-compose
-- 8GB RAM (Milvus is memory-hungry)
-- 10GB disk space
-
-### 1. Clone and configure
+### 1. Configure Environment
 
 ```bash
-git clone https://github.com/yourusername/semantic-search-platform
-cd semantic-search-platform
 cp .env.example .env
 ```
 
-### 2. Start all services
+For Docker Compose, make sure `.env` uses Docker service hostnames:
+
+```env
+QDRANT_HOST=qdrant
+REDIS_HOST=redis
+MONGO_URI=mongodb://mongo:27017
+API_BASE=http://api:8000/api/v1
+```
+
+For running the API directly on your host machine, use localhost values instead:
+
+```env
+QDRANT_HOST=localhost
+REDIS_HOST=localhost
+MONGO_URI=mongodb://localhost:27017
+API_BASE=http://localhost:8000/api/v1
+```
+
+### 2. Start the Platform
 
 ```bash
 docker-compose up -d
 ```
 
-Services spin up in order: etcd → minio → milvus → redis → mongo → api → ui
+This starts:
 
-### 3. Wait for readiness
+```text
+qdrant -> redis -> mongo -> api -> worker -> ui
+```
+
+### 3. Check Health
 
 ```bash
 curl http://localhost:8000/api/v1/health
 ```
 
-Expected: `{"status": "ok", "services": {...}}`
+Expected shape:
 
-### 4. Ingest ArXiv papers
+```json
+{
+  "status": "ok",
+  "app": "semantic-search-platform",
+  "services": {
+    "qdrant": "ok (... vectors)",
+    "mongodb": "ok (... papers)",
+    "redis": "ok",
+    "embedding_model": "all-mpnet-base-v2"
+  }
+}
+```
+
+### 4. Ingest Papers
+
+Run ingestion from your host machine:
 
 ```bash
-# Index 50,000 papers (takes ~15 minutes)
-python scripts/ingest_arxiv.py --limit 50000
-
-# Index only ML/AI papers
-python scripts/ingest_arxiv.py --limit 10000 --categories cs.AI cs.LG cs.CL
+python scripts/ingest_arxiv.py --limit 50000 --batch-size 64 --api-base http://localhost:8000/api/v1
 ```
+
+Filter to selected categories:
+
+```bash
+python scripts/ingest_arxiv.py --limit 10000 --categories cs.AI cs.LG cs.CL --api-base http://localhost:8000/api/v1
+```
+
+The script streams `CShorten/ML-ArXiv-Papers` from Hugging Face, prepares paper records, and sends batches to `/api/v1/index/bulk`.
 
 ### 5. Search
 
-Open http://localhost:8501 in your browser, or use the API directly:
+Open the UI:
+
+```text
+http://localhost:8501
+```
+
+Or call the API directly:
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/search \
@@ -154,7 +227,58 @@ curl -X POST http://localhost:8000/api/v1/search \
 
 ## API Reference
 
+### `GET /api/v1/health`
+
+Checks Qdrant, MongoDB, Redis, and the embedding model configuration.
+
+### `POST /api/v1/embed`
+
+Embeds one text string and caches the result in Redis.
+
+```json
+{
+  "text": "attention mechanism in transformers"
+}
+```
+
+### `POST /api/v1/index`
+
+Indexes one paper.
+
+```json
+{
+  "paper_id": "2301.07041",
+  "title": "Example Paper Title",
+  "abstract": "Paper abstract text...",
+  "authors": ["Author One", "Author Two"],
+  "categories": ["cs.LG", "cs.AI"],
+  "published": "2023-01-01"
+}
+```
+
+### `POST /api/v1/index/bulk`
+
+Indexes up to 1000 papers in one request.
+
+```json
+{
+  "papers": [
+    {
+      "paper_id": "2301.07041",
+      "title": "Example Paper Title",
+      "abstract": "Paper abstract text...",
+      "authors": [],
+      "categories": ["cs.LG"],
+      "published": ""
+    }
+  ]
+}
+```
+
 ### `POST /api/v1/search`
+
+Searches indexed papers by semantic similarity.
+
 ```json
 {
   "query": "neural networks that explain their decisions",
@@ -162,55 +286,49 @@ curl -X POST http://localhost:8000/api/v1/search \
 }
 ```
 
-### `POST /api/v1/embed`
-```json
-{ "text": "attention mechanism in transformers" }
-```
-
-### `POST /api/v1/index`
-```json
-{
-  "paper_id": "2301.07041",
-  "title": "Scaling Laws for Neural Language Models",
-  "abstract": "We study empirical scaling laws...",
-  "authors": ["Kaplan, J.", "McCandlish, S."],
-  "categories": ["cs.LG", "cs.AI"]
-}
-```
-
-### `POST /api/v1/index/bulk`
-```json
-{ "papers": [...] }
-```
-
-### `GET /api/v1/health`
-Returns service status for Milvus, MongoDB, Redis, and the embedding model.
-
-Full interactive docs at http://localhost:8000/docs
-
 ---
 
 ## Development
 
+Install dependencies:
+
 ```bash
-# Install deps
 pip install -r requirements.txt
-
-# Start infrastructure only
-docker-compose up -d milvus redis mongo
-
-# Run API locally
-uvicorn main:app --reload
-
-# Run Streamlit locally
-streamlit run streamlit_app.py
-
-# Run tests
-pytest tests/ -v
-
-# Lint
-ruff check app/ main.py
 ```
+
+Start only the backing services:
+
+```bash
+docker-compose up -d qdrant redis mongo
+```
+
+Run the API locally:
+
+```bash
+uvicorn main:app --reload
+```
+
+Run the UI locally:
+
+```bash
+streamlit run streamlit_app.py
+```
+
+Run tests:
+
+```bash
+pytest tests/ -v
+```
+
+---
+
+## Notes
+
+- The first embedding request may be slow while the SentenceTransformers model loads.
+- Ingestion requires internet access to stream the Hugging Face dataset.
+- Query embeddings are cached in Redis using a content hash.
+- Qdrant stores vectors with `paper_id` in the payload.
+- MongoDB is the source of truth for human-readable paper metadata.
 
 ---
 
